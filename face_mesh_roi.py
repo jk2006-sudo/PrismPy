@@ -1,59 +1,56 @@
 import cv2
-import numpy as np
+import mediapipe as mp
 
-# Load face detector
-net = cv2.dnn.readNetFromCaffe(
-    "deploy.prototxt",
-    "res10_300x300_ssd_iter_140000.caffemodel"
+mp_face_mesh = mp.solutions.face_mesh
+
+face_mesh = mp_face_mesh.FaceMesh(
+    static_image_mode=False,
+    max_num_faces=1,
+    refine_landmarks=True,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
 )
 
+left_eye_indices = [33, 133, 160, 159, 158, 153, 144, 145]
+right_eye_indices = [362, 263, 387, 386, 385, 384, 373, 374]
+
 cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    raise RuntimeError("Could not open webcam")
 
 while True:
-    ret, frame = cap.read()
-    if not ret:
+    success, frame = cap.read()
+    if not success:
         break
 
-    h, w = frame.shape[:2]
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb_frame)
 
-    blob = cv2.dnn.blobFromImage(
-        frame, 1.0, (300, 300),
-        (104.0, 177.0, 123.0)
-    )
-    net.setInput(blob)
-    detections = net.forward()
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            h, w, _ = frame.shape
 
-    for i in range(detections.shape[2]):
-        confidence = detections[0, 0, i, 2]
-        if confidence > 0.6:
-            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-            x1, y1, x2, y2 = box.astype("int")
+            def draw_roi(indices, color):
+                xs = [int(face_landmarks.landmark[i].x * w) for i in indices]
+                ys = [int(face_landmarks.landmark[i].y * h) for i in indices]
+                x_min, x_max = min(xs), max(xs)
+                y_min, y_max = min(ys), max(ys)
+                if x_max > x_min and y_max > y_min:
+                    cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color, 2)
 
-            face = frame[y1:y2, x1:x2]
+            draw_roi(left_eye_indices, (0, 255, 0))
+            draw_roi(right_eye_indices, (255, 0, 0))
 
-            # Estimate eye region (upper part of face)
-            fh, fw = face.shape[:2]
-            eye_y1 = int(fh * 0.2)
-            eye_y2 = int(fh * 0.45)
+            # Forehead: centered around landmark 10, expanded box
+            fx = int(face_landmarks.landmark[10].x * w)
+            fy = int(face_landmarks.landmark[10].y * h)
+            box_w, box_h = 100, 80  # adjust size here
+            x_min, x_max = fx - box_w//2, fx + box_w//2
+            y_min, y_max = fy - box_h//2, fy + box_h//2
+            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
 
-            left_eye = face[eye_y1:eye_y2, int(fw * 0.1):int(fw * 0.45)]
-            right_eye = face[eye_y1:eye_y2, int(fw * 0.55):int(fw * 0.9)]
+    cv2.imshow("Face Mesh + ROIs", frame)
 
-            # Draw boxes
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.rectangle(frame,
-                          (x1 + int(fw*0.1), y1 + eye_y1),
-                          (x1 + int(fw*0.45), y1 + eye_y2),
-                          (255, 0, 0), 2)
-
-            cv2.rectangle(frame,
-                          (x1 + int(fw*0.55), y1 + eye_y1),
-                          (x1 + int(fw*0.9), y1 + eye_y2),
-                          (255, 0, 0), 2)
-
-            break
-
-    cv2.imshow("Face + Eye ROI (Python 3.13)", frame)
     if cv2.waitKey(1) & 0xFF == 27:
         break
 
